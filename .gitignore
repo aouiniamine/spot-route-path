@@ -1,0 +1,21 @@
+.venv/
+*.pyc
+__pycache__/
+
+# Local configuration and databases
+.env
+.env.*
+!.env.example
+db.sqlite3
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local OS and editor files
+.DS_Store
+.idea/
+.vscode/
