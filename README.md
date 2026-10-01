@@ -3,6 +3,9 @@
 The Django project uses a PostGIS database. `apps.fuel_stations` owns the station
 records and CSV import; `apps.geo` contains geocoding and the fuel route API.
 
+For a Docker API build, local Compose setup, and Vercel deployment settings,
+see [infra/README.md](infra/README.md).
+
 ## Fuel route API
 
 `POST /api/geo/route` accepts JSON coordinates:
@@ -50,6 +53,9 @@ test -f .env || cp .env.example .env
 docker compose up -d db
 python manage.py migrate
 ```
+
+To copy the local development database to another PostgreSQL/PostGIS database,
+follow [the SQL dump and restore guide](docs/migrate-local-database.md).
 
 Put your LocationIQ server key in `.env` as `LOCATIONIQ_API_KEY=your-key`.
 For the map preview, set `LOCATIONIQ_MAPS_PUBLIC_KEY` to a separate public token

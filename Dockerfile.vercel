@@ -1,0 +1,28 @@
+# Vercel requires this file at the project root. Keep it in sync with infra/Dockerfile.
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8000
+
+WORKDIR /app
+
+# GeoDjango needs GDAL, GEOS, and PROJ at runtime.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gdal-bin libgeos-c1v5 proj-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && command -v gunicorn
+
+COPY apps ./apps
+COPY config ./config
+COPY manage.py ./
+
+RUN groupadd --system app && useradd --system --gid app --home-dir /app app \
+    && chown -R app:app /app
+USER app
+
+EXPOSE 8000
+CMD ["sh", "-c", "exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 1 --threads 4 --timeout 120 --access-logfile - --error-logfile -"]
