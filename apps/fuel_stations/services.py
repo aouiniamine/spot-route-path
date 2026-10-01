@@ -1,0 +1,209 @@
+"""CSV staging and batched geocoding for fuel stations."""
+
+import csv
+from decimal import Decimal, InvalidOperation
+from itertools import islice
+from pathlib import Path
+from typing import Callable
+
+from django.conf import settings
+from django.contrib.gis.geos import Point
+from django.db import transaction
+
+from apps.geo.clients.locationiq import GeocodingResult, LocationIQClient, LocationIQError
+
+from .models import FuelStation
+from .selectors import stations_needing_geocoding
+
+
+CSV_COLUMNS = {
+    'OPIS Truckstop ID': 'opis_truckstop_id',
+    'Truckstop Name': 'name',
+    'Address': 'address',
+    'City': 'city',
+    'State': 'state',
+    'Rack ID': 'rack_id',
+    'Retail Price': 'retail_price',
+}
+SOURCE_FIELDS = tuple(CSV_COLUMNS.values())
+GEOCODING_FIELDS = (
+    'latitude', 'longitude', 'location', 'display_name',
+    'geocoding_status', 'geocoding_error',
+)
+CANADIAN_PROVINCES = {'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'}
+
+
+def source_name(path: Path) -> str:
+    path = path.resolve()
+    try:
+        return str(path.relative_to(settings.BASE_DIR))
+    except ValueError:
+        return str(path)
+
+
+def stage_csv(path: Path, *, batch_size: int) -> tuple[str, int]:
+    """Upsert every CSV row, retaining geocodes when its address has not changed."""
+    source_file = source_name(path)
+    count = 0
+    with path.open('r', newline='', encoding='utf-8-sig') as csv_file:
+        reader = csv.DictReader(csv_file)
+        missing = set(CSV_COLUMNS) - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f'CSV is missing columns: {", ".join(sorted(missing))}')
+
+        batch = []
+        for row_number, row in enumerate(reader, start=2):
+            data = {field: (row[column] or '').strip() for column, field in CSV_COLUMNS.items()}
+            if any(not value for value in data.values()):
+                raise ValueError(f'CSV row {row_number} has a blank required value')
+            try:
+                data['retail_price'] = Decimal(data['retail_price'])
+            except InvalidOperation:
+                raise ValueError(f'CSV row {row_number} has an invalid retail price') from None
+            if not data['retail_price'].is_finite():
+                raise ValueError(f'CSV row {row_number} has an invalid retail price')
+            batch.append(FuelStation(source_file=source_file, source_row_number=row_number, **data))
+            count += 1
+            if len(batch) >= batch_size:
+                _save_source_batch(batch)
+                batch.clear()
+        if batch:
+            _save_source_batch(batch)
+    return source_file, count
+
+
+@transaction.atomic
+def _save_source_batch(batch: list[FuelStation]) -> None:
+    source_file = batch[0].source_file
+    existing = {
+        station.source_row_number: station
+        for station in FuelStation.objects.filter(
+            source_file=source_file,
+            source_row_number__in=[station.source_row_number for station in batch],
+        )
+    }
+    to_create = []
+    to_update = []
+    for incoming in batch:
+        station = existing.get(incoming.source_row_number)
+        if station is None:
+            to_create.append(incoming)
+            continue
+        address_changed = any(
+            getattr(station, field) != getattr(incoming, field)
+            for field in ('address', 'city', 'state')
+        )
+        if any(getattr(station, field) != getattr(incoming, field) for field in SOURCE_FIELDS):
+            for field in SOURCE_FIELDS:
+                setattr(station, field, getattr(incoming, field))
+            if address_changed:
+                station.latitude = None
+                station.longitude = None
+                station.location = None
+                station.display_name = ''
+                station.geocoding_status = FuelStation.GeocodingStatus.PENDING
+                station.geocoding_error = ''
+            to_update.append(station)
+    if to_create:
+        FuelStation.objects.bulk_create(to_create, batch_size=len(batch))
+    if to_update:
+        FuelStation.objects.bulk_update(
+            to_update, fields=SOURCE_FIELDS + GEOCODING_FIELDS, batch_size=len(batch)
+        )
+
+
+def geocode_stations(
+    source_file: str,
+    client: LocationIQClient,
+    *,
+    batch_size: int,
+    retry_no_match: bool = False,
+    limit: int | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[int, int]:
+    """Save each processed batch; reruns skip rows already geocoded."""
+    cache: dict[tuple[str, str, str, str], GeocodingResult | None] = {}
+    for station in FuelStation.objects.filter(
+        source_file=source_file, geocoding_status=FuelStation.GeocodingStatus.GEOCODED
+    ).iterator(chunk_size=batch_size):
+        cache[_cache_key(station)] = GeocodingResult(
+            station.latitude, station.longitude, station.display_name
+        )
+
+    pending = stations_needing_geocoding(source_file, retry_no_match=retry_no_match)
+    iterator = pending.iterator(chunk_size=batch_size)
+    geocoded = no_match = processed = 0
+    while True:
+        remaining = batch_size if limit is None else min(batch_size, limit - processed)
+        if remaining <= 0:
+            break
+        batch = list(islice(iterator, remaining))
+        if not batch:
+            break
+        completed = []
+        for station in batch:
+            try:
+                key = _cache_key(station)
+                if key not in cache:
+                    query, country_code = _geocoding_query(station)
+                    result = client.forward_geocode(
+                        query,
+                        country_code=country_code,
+                        expected_city=station.city,
+                        expected_state=station.state,
+                    )
+                    if result is None:
+                        country_name = 'Canada' if country_code == 'ca' else 'United States'
+                        name_query = (
+                            f'{station.name}, {station.city}, {station.state}, {country_name}'
+                        )
+                        result = client.forward_geocode(
+                            name_query,
+                            country_code=country_code,
+                            expected_city=station.city,
+                            expected_state=station.state,
+                        )
+                    cache[key] = result
+                result = cache[key]
+            except LocationIQError as exc:
+                station.geocoding_status = FuelStation.GeocodingStatus.ERROR
+                station.geocoding_error = str(exc)
+                completed.append(station)
+                _save_geocoding_batch(completed)
+                raise LocationIQError(
+                    f'Geocoding stopped at CSV row {station.source_row_number}: {exc}'
+                ) from None
+
+            if result is None:
+                station.geocoding_status = FuelStation.GeocodingStatus.NO_MATCH
+                station.geocoding_error = ''
+                no_match += 1
+            else:
+                station.latitude = result.latitude.quantize(Decimal('0.00000001'))
+                station.longitude = result.longitude.quantize(Decimal('0.00000001'))
+                station.location = Point(float(station.longitude), float(station.latitude), srid=4326)
+                station.display_name = result.display_name
+                station.geocoding_status = FuelStation.GeocodingStatus.GEOCODED
+                station.geocoding_error = ''
+                geocoded += 1
+            completed.append(station)
+            processed += 1
+
+        _save_geocoding_batch(completed)
+        if progress:
+            progress(geocoded, no_match)
+    return geocoded, no_match
+
+
+def _save_geocoding_batch(batch: list[FuelStation]) -> None:
+    FuelStation.objects.bulk_update(batch, fields=GEOCODING_FIELDS, batch_size=len(batch))
+
+
+def _geocoding_query(station: FuelStation) -> tuple[str, str]:
+    country_code = 'ca' if station.state.upper() in CANADIAN_PROVINCES else 'us'
+    country_name = 'Canada' if country_code == 'ca' else 'United States'
+    return f'{station.address}, {station.city}, {station.state}, {country_name}', country_code
+
+
+def _cache_key(station: FuelStation) -> tuple[str, str, str, str]:
+    return station.name, station.address, station.city, station.state

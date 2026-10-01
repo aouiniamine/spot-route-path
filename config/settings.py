@@ -10,22 +10,30 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-@q)fa=xdpvi6%yf2ah6@q=qclc*st0!68_5ko)_o53ru255y9n'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', '')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DJANGO_DEBUG', 'false').lower() in {'1', 'true', 'yes', 'on'}
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip() for host in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',') if host.strip()
+]
+
+LOCATIONIQ_API_KEY = os.getenv('LOCATIONIQ_API_KEY', '')
 
 
 # Application definition
@@ -37,6 +45,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.gis',
+    'apps.geo',
+    'apps.fuel_stations',
 ]
 
 MIDDLEWARE = [
@@ -74,8 +85,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',
+        'NAME': os.getenv('POSTGRES_DB', 'spotter'),
+        'USER': os.getenv('POSTGRES_USER', 'postgres'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgres'),
+        'HOST': os.getenv('POSTGRES_HOST', '127.0.0.1'),
+        'PORT': os.getenv('POSTGRES_PORT', '5444'),
     }
 }
 
