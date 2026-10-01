@@ -32,8 +32,13 @@ DEBUG = os.getenv('DJANGO_DEBUG', 'false').lower() in {'1', 'true', 'yes', 'on'}
 ALLOWED_HOSTS = [
     host.strip() for host in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',') if host.strip()
 ]
-if vercel_host := os.getenv('VERCEL_URL'):
-    ALLOWED_HOSTS.append(vercel_host)
+for vercel_host_variable in (
+    'VERCEL_URL',
+    'VERCEL_BRANCH_URL',
+    'VERCEL_PROJECT_PRODUCTION_URL',
+):
+    if vercel_host := os.getenv(vercel_host_variable):
+        ALLOWED_HOSTS.append(vercel_host)
 
 if os.getenv('DJANGO_TRUST_PROXY_HEADERS', 'false').lower() in {'1', 'true', 'yes', 'on'}:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
