@@ -44,3 +44,24 @@ The model stores LocationIQ's display name, latitude, longitude, and a PostGIS
 `geography(Point, 4326)` column. The point uses **longitude, latitude** order.
 Rows without a geocoding match remain in the table with `no_match` status and
 empty coordinates.
+
+## Retry unresolved stations with OpenStreetMap
+
+Set `NOMINATIM_CONTACT_EMAIL=you@example.com` in `.env`, then run:
+
+```sh
+python manage.py retry_fuel_stations_osm --limit 10
+```
+
+The command selects rows with `no_match` or `error` status and no location,
+checks Nominatim's city and state, then updates latitude, longitude, display
+name, and the PostGIS point. It records attempted rows and caches successful
+and unsuccessful searches across runs. Changed CSV addresses clear the attempt
+marker. The management command sleeps between requests so each public API
+request starts at least 16 seconds after the previous one. It accepts at most 100 rows
+per command run. Run only one worker on one machine.
+Public Nominatim is suitable for small, one-time retries; for a large backlog,
+set `NOMINATIM_BASE_URL` to a private Nominatim-compatible HTTPS endpoint.
+Follow the [public API usage policy](https://operations.osmfoundation.org/policies/nominatim/)
+and provide [OpenStreetMap attribution](https://www.openstreetmap.org/copyright)
+when displaying its data.

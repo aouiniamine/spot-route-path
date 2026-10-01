@@ -26,6 +26,7 @@ class FuelStation(models.Model):
         max_length=16, choices=GeocodingStatus, default=GeocodingStatus.PENDING
     )
     geocoding_error = models.TextField(blank=True)
+    osm_attempted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [

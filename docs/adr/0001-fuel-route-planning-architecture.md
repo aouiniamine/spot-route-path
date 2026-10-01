@@ -35,7 +35,7 @@ The aim is one direct Directions call, a small number of Matrix batches for trip
 - Matrix distances are estimates for choosing stops. The **final Directions legs** decide whether the plan is safe and what the trip cost is.
 - Keep the same driving profile and coordinate order (`longitude,latitude`) across requests. Directions follows the order of supplied stops.
 - A request that reaches a provider-call or time cap is `planning_unavailable`, not proof that no fuel stop exists.
-- A full 50-gallon starting tank and fuel bought after departure are working product assumptions. Verify the CSV's fuel type, unit, timestamp, and repeated-price rows before release.
+- A full 50-gallon starting tank and fuel bought after departure are working product assumptions. Treat `retail_price` as price per gallon. When rows repeat the same physical stop, use the lowest listed price once and keep the chosen source row in the result.
 
 ## Evidence from the first spike
 

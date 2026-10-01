@@ -1,6 +1,8 @@
 """CSV staging and batched geocoding for fuel stations."""
 
 import csv
+import hashlib
+import json
 from decimal import Decimal, InvalidOperation
 from itertools import islice
 from pathlib import Path
@@ -9,8 +11,11 @@ from typing import Callable
 from django.conf import settings
 from django.contrib.gis.geos import Point
 from django.db import transaction
+from django.utils import timezone
 
+from apps.geo.clients.nominatim import NominatimError
 from apps.geo.clients.locationiq import GeocodingResult, LocationIQClient, LocationIQError
+from apps.geo.models import NominatimSearchCache
 
 from .models import FuelStation
 from .selectors import stations_needing_geocoding
@@ -29,6 +34,7 @@ SOURCE_FIELDS = tuple(CSV_COLUMNS.values())
 GEOCODING_FIELDS = (
     'latitude', 'longitude', 'location', 'display_name',
     'geocoding_status', 'geocoding_error',
+    'osm_attempted_at',
 )
 CANADIAN_PROVINCES = {'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'}
 
@@ -103,6 +109,7 @@ def _save_source_batch(batch: list[FuelStation]) -> None:
                 station.display_name = ''
                 station.geocoding_status = FuelStation.GeocodingStatus.PENDING
                 station.geocoding_error = ''
+                station.osm_attempted_at = None
             to_update.append(station)
     if to_create:
         FuelStation.objects.bulk_create(to_create, batch_size=len(batch))
@@ -207,3 +214,79 @@ def _geocoding_query(station: FuelStation) -> tuple[str, str]:
 
 def _cache_key(station: FuelStation) -> tuple[str, str, str, str]:
     return station.name, station.address, station.city, station.state
+
+
+def retry_unmatched_stations(
+    client, *, batch_size: int, limit: int | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[int, int]:
+    """Try Nominatim once per unresolved row, saving progress after each batch."""
+    rows = FuelStation.objects.filter(
+        geocoding_status__in=[FuelStation.GeocodingStatus.NO_MATCH, FuelStation.GeocodingStatus.ERROR],
+        location__isnull=True,
+        osm_attempted_at__isnull=True,
+    ).order_by('pk')
+    if limit is not None:
+        rows = rows[:limit]
+    found = missing = 0
+    iterator = rows.iterator(chunk_size=batch_size)
+    while batch := list(islice(iterator, batch_size)):
+        completed = []
+        for station in batch:
+            query, country_code = _geocoding_query(station)
+            country_name = 'Canada' if country_code == 'ca' else 'United States'
+            queries = [query, f'{station.name}, {station.city}, {station.state}, {country_name}']
+            try:
+                result = None
+                for search_query in queries:
+                    result = _cached_nominatim_search(
+                        client, search_query, country_code, station.city, station.state
+                    )
+                    if result is not None:
+                        break
+            except NominatimError as exc:
+                station.geocoding_status = FuelStation.GeocodingStatus.ERROR
+                station.geocoding_error = str(exc)
+                completed.append(station)
+                _save_geocoding_batch(completed)
+                raise NominatimError(
+                    f'OpenStreetMap geocoding stopped at station {station.pk}: {exc}'
+                ) from None
+
+            if result is None:
+                station.geocoding_status = FuelStation.GeocodingStatus.NO_MATCH
+                missing += 1
+            else:
+                station.latitude = result.latitude.quantize(Decimal('0.00000001'))
+                station.longitude = result.longitude.quantize(Decimal('0.00000001'))
+                station.location = Point(float(station.longitude), float(station.latitude), srid=4326)
+                station.display_name = result.display_name
+                station.geocoding_status = FuelStation.GeocodingStatus.GEOCODED
+                found += 1
+            station.geocoding_error = ''
+            station.osm_attempted_at = timezone.now()
+            completed.append(station)
+        _save_geocoding_batch(completed)
+        if progress:
+            progress(found, missing)
+    return found, missing
+
+
+def _cached_nominatim_search(client, query, country_code, city, state):
+    key = hashlib.sha256(json.dumps(
+        [query, country_code, city, state], ensure_ascii=False
+    ).encode('utf-8')).hexdigest()
+    cached = NominatimSearchCache.objects.filter(key=key).first()
+    if cached is not None:
+        return (GeocodingResult(cached.latitude, cached.longitude, cached.display_name)
+                if cached.found else None)
+    result = client.forward_geocode(
+        query, country_code=country_code, expected_city=city, expected_state=state
+    )
+    NominatimSearchCache.objects.create(
+        key=key, query=query, found=result is not None,
+        latitude=result.latitude if result else None,
+        longitude=result.longitude if result else None,
+        display_name=result.display_name if result else '',
+    )
+    return result

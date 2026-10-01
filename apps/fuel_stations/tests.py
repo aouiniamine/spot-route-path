@@ -2,14 +2,16 @@ import csv
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from django.test import TestCase
 
 from apps.geo.clients.locationiq import GeocodingResult
+from apps.geo.models import NominatimSearchCache
 
+from .management.commands.retry_fuel_stations_osm import PacedNominatimClient
 from .models import FuelStation
-from .services import geocode_stations, stage_csv
+from .services import geocode_stations, retry_unmatched_stations, stage_csv
 
 
 class FuelStationImportTests(TestCase):
@@ -65,3 +67,59 @@ class FuelStationImportTests(TestCase):
         self.assertIn('Kwik Trip', client.forward_geocode.call_args.args[0])
         station.refresh_from_db()
         self.assertEqual(station.display_name, 'Kwik Trip, Tomah')
+
+
+class FuelStationOSMTests(TestCase):
+    @patch('apps.fuel_stations.management.commands.retry_fuel_stations_osm.time.sleep')
+    @patch('apps.fuel_stations.management.commands.retry_fuel_stations_osm.time.monotonic')
+    def test_command_sleeps_between_searches(self, monotonic, sleep):
+        monotonic.side_effect = [100, 101, 116]
+        client = Mock()
+        paced = PacedNominatimClient(client, 16)
+
+        paced.forward_geocode('address')
+        paced.forward_geocode('name')
+
+        sleep.assert_called_once_with(15)
+        self.assertEqual(client.forward_geocode.call_count, 2)
+
+    def test_osm_retry_updates_only_unresolved_rows_and_caches_queries(self):
+        stations = []
+        for number, status in enumerate(['no_match', 'error', 'pending'], start=2):
+            stations.append(FuelStation.objects.create(
+                source_file='test.csv', source_row_number=number, opis_truckstop_id=str(number),
+                name='Station', address='1 Main St', city='Albany', state='NY',
+                rack_id='20', retail_price=Decimal('3.20'), geocoding_status=status,
+            ))
+        client = Mock()
+        client.forward_geocode.return_value = GeocodingResult(
+            Decimal('42.65258'), Decimal('-73.75623'), '1 Main St, Albany, NY'
+        )
+
+        self.assertEqual(retry_unmatched_stations(client, batch_size=1), (2, 0))
+        self.assertEqual(client.forward_geocode.call_count, 1)
+        self.assertEqual(NominatimSearchCache.objects.count(), 1)
+        for station in stations[:2]:
+            station.refresh_from_db()
+            self.assertEqual(station.geocoding_status, FuelStation.GeocodingStatus.GEOCODED)
+            self.assertIsNotNone(station.osm_attempted_at)
+            self.assertEqual(station.location.x, float(station.longitude))
+        stations[2].refresh_from_db()
+        self.assertEqual(stations[2].geocoding_status, FuelStation.GeocodingStatus.PENDING)
+        self.assertEqual(retry_unmatched_stations(client, batch_size=1), (0, 0))
+
+    def test_osm_no_match_is_not_retried_on_next_run(self):
+        station = FuelStation.objects.create(
+            source_file='test.csv', source_row_number=2, opis_truckstop_id='2',
+            name='Station', address='Unknown road', city='Albany', state='NY',
+            rack_id='20', retail_price=Decimal('3.20'), geocoding_status='error',
+        )
+        client = Mock()
+        client.forward_geocode.return_value = None
+        self.assertEqual(retry_unmatched_stations(client, batch_size=1), (0, 1))
+        self.assertEqual(client.forward_geocode.call_count, 2)
+        station.refresh_from_db()
+        self.assertEqual(station.geocoding_status, FuelStation.GeocodingStatus.NO_MATCH)
+        self.assertIsNotNone(station.osm_attempted_at)
+        self.assertEqual(retry_unmatched_stations(client, batch_size=1), (0, 0))
+        self.assertEqual(client.forward_geocode.call_count, 2)

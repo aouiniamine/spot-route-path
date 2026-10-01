@@ -34,6 +34,8 @@ ALLOWED_HOSTS = [
 ]
 
 LOCATIONIQ_API_KEY = os.getenv('LOCATIONIQ_API_KEY', '')
+NOMINATIM_CONTACT_EMAIL = os.getenv('NOMINATIM_CONTACT_EMAIL', '')
+NOMINATIM_BASE_URL = os.getenv('NOMINATIM_BASE_URL', 'https://nominatim.openstreetmap.org/search')
 
 
 # Application definition

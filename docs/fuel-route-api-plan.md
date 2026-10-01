@@ -48,7 +48,7 @@ Illustrative response shape, not a real quote:
     "gallons_purchased": "50.000",
     "estimated_gallons_consumed": "100.000",
     "total_fuel_cost_usd": "162.50",
-    "price_snapshot_id": "example-batch"
+    "price_source_file": "data/truck-stations-and-prices.csv"
   },
   "planning": {
     "status": "best_within_search",
@@ -67,7 +67,7 @@ Use `400` for malformed input, `422` for an unresolved place or a trip LocationI
 - A full tank at departure holds 50 usable gallons. A route of 500 miles or less needs no stop. `total_fuel_cost_usd` sums fuel bought **after departure**; it can be `$0.00` even though the trip used fuel.
 - Each road leg uses `road_miles / 10` gallons. Check range using full-precision local road distances, not rounded displayed miles or straight-line miles. The tank cannot hold more than 50 gallons. Do not buy extra fuel merely to arrive with a full tank.
 - Choose stops and purchase amounts to minimize the estimated amount paid, with a cap on extra driving. Use less driving and then fewer stops to break equal-cost ties. A single searched corridor cannot prove the cheapest possible route across every US road; report that limit.
-- Only use geocoded US stations with valid, positive prices. The CSV has Canadian rows, repeated OPIS IDs, and no known fuel-product or price-date field. Confirm what the price means before release. Do not silently choose the cheapest of conflicting rows. Return the chosen price row and one complete price snapshot per plan.
+- Treat `retail_price` as USD per gallon. Only use geocoded US stations with a positive price from the configured CSV source. The CSV repeats some station IDs with different prices at the same address. Show each physical stop once, use its lowest listed price as the working rule, and return the chosen source row. Prices are estimates from the imported file, not live quotes.
 - Use decimal money math. Round each displayed stop cost to cents with `ROUND_HALF_UP`; make the total equal the sum of those displayed costs.
 
 ## Route search
@@ -76,7 +76,7 @@ Use `400` for malformed input, `422` for an unresolved place or a trip LocationI
 2. Search PostGIS for stations near that route. Use Python to place candidates along the line and remove clearly impossible pairs. A point near the line is not proof of road access.
 3. Ask LocationIQ Matrix for **selected** directed road distances, in small batches. Build a graph of legs no longer than 500 miles. Do not use straight-line fallback for an unreachable road pair.
 4. In Python, choose a station path and purchase amounts. Ask Directions for the final route through those stations, then verify every leg and recalculate fuel and money from that route.
-5. Return the map line, stops, costs, price snapshot, provider, and search limits. If the selected plan fails final checks, retry within a provider-call budget or return `503`.
+5. Return the map line, stops, costs, price source row/file, provider, and search limits. If the selected plan fails final checks, retry within a provider-call budget or return `503`.
 
 The first release searches stations near one direct corridor. A wider multi-corridor search can be added later without changing the endpoint shape.
 
@@ -84,14 +84,13 @@ The first release searches stations near one direct corridor. A wider multi-corr
 
 - Test trips under, at, and over 500 miles; several stops; cheaper fuel earlier in the trip; partial final purchases; and no reachable station.
 - Test station snapping, one-way roads, disconnected roads, and a route that is much longer than the straight line. Every returned Directions leg must fit the fuel available at its start.
-- Test US-only inputs/stations, the chosen Canada-border rule, duplicate price rows, price-snapshot changes, router failures, and timeouts.
+- Test US-only inputs/stations, the chosen Canada-border rule, duplicate price rows, provider failures, and timeouts.
 - Benchmark LocationIQ calls, p95 API time, and cost quality on short and long US trips before setting final search limits.
 
 ## Decisions to confirm
 
 1. Full starting tank and “money paid after departure” as the cost definition.
-2. CSV fuel product, USD-per-gallon unit, timestamp, and duplicate-price rule.
-3. Supported road coverage, border-crossing policy, and maximum acceptable detour.
+2. Border-crossing policy and maximum acceptable detour.
 
 ## References
 
