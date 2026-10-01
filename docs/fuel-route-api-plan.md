@@ -21,7 +21,9 @@ Driving miles and route geometry come from **LocationIQ Directions**. Selected r
 
 The request DTO is `FuelRouteRequest(start: CoordinateRequest, finish: CoordinateRequest)`. `CoordinateRequest` has numeric `lat` and `lng` only. Addresses and additional fields are rejected. The backend estimates whether each point is near the contiguous US using a 1,700-mile radius from the approximate center near Lebanon, Kansas (39°50′ N, 98°35′ W). This check makes no LocationIQ request. A radius can accept nearby Canadian or Mexican points and excludes Alaska and Hawaii; it is not a country-boundary check. The center follows the [USGS geographic centers reference](https://www.usgs.gov/educational-resources/geographic-centers).
 
-The response DTO is `FuelRouteResponse(route: RouteResponse, fuel_stops: list[FuelStopResponse], fuel: FuelSummaryResponse, planning: PlanningResponse)`. A stop's `location` is a `CoordinateResponse`. These typed Python DTOs are defined in [`apps/geo/dtos.py`](../apps/geo/dtos.py). JSON keys follow the field names shown below.
+The response DTO is `FuelRouteResponse(route: RouteResponse, fuel_stops: list[FuelStopResponse], fuel: FuelSummaryResponse, planning: PlanningResponse, route_url: str | None)`. A stop's `location` is a `CoordinateResponse`. These typed Python DTOs are defined in [`apps/geo/dtos.py`](../apps/geo/dtos.py). Every successful HTTP response includes a `route_url` string. JSON keys follow the field names shown below.
+
+Successful responses are cached in the `routes_cache` table for 24 hours. Each row has a UUID primary key; a separate unique hash uses the validated start and finish coordinates, so JSON whitespace and field order do not matter. A cache hit returns the saved JSON before the planner or LocationIQ client runs. Expired rows are ignored and removed when a new result is saved. Errors are never cached. Station import and cleanup clear the cache to avoid serving old prices after those operations.
 
 Illustrative response shape, not a real quote:
 
@@ -58,11 +60,20 @@ Illustrative response shape, not a real quote:
     "routing_provider": "LocationIQ",
     "candidate_count": 12,
     "provider_calls": 3
-  }
+  },
+  "route_url": "https://your-api.example/api/geo/route/550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-GeoJSON coordinates are `[longitude, latitude]`. The route must pass through the displayed stops. Mile markers, total distance, and fuel use must come from the final routed legs. A map client can draw the geometry; the API does not return a map image.
+GeoJSON coordinates are `[longitude, latitude]`. The route must pass through the displayed stops. Mile markers, total distance, and fuel use must come from the final routed legs.
+
+`GET /api/geo/route/{uuid}` returns an HTML LocationIQ map preview that can be shared or embedded in an iframe. It draws the cached final route GeoJSON and fuel-stop markers, so opening it does not call Directions again. For example:
+
+```html
+<iframe src="https://your-api.example/api/geo/route/550e8400-e29b-41d4-a716-446655440000" title="Fuel route map" width="800" height="500"></iframe>
+```
+
+The preview returns `404` for unknown or expired UUIDs. Its URL stays valid for up to 24 hours and is removed sooner if station data is imported or cleaned. The browser loads LocationIQ map tiles using `LOCATIONIQ_MAPS_PUBLIC_KEY`. Configure a separate public token with HTTP referrer restrictions; if omitted, the server's `LOCATIONIQ_API_KEY` is used and exposed to the browser. The GET endpoint does not return a map image.
 
 Use `400` for malformed input, `422` for coordinates outside the supported radius or a trip LocationIQ cannot drive, and `503` when the provider or planner is unavailable. An error has shape `{ "error": { "code": "planning_unavailable", "message": "..." } }`.
 

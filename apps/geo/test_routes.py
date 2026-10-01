@@ -2,7 +2,7 @@ import json
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .dtos import CoordinateRequest, RequestValidationError, FuelRouteRequest
@@ -22,7 +22,7 @@ def route(legs):
             'distance': sum(legs), 'duration': 3600, 'legs': legs}
 
 
-class DTOTests(SimpleTestCase):
+class DTOTests(TestCase):
     def test_endpoint_path(self):
         self.assertEqual(reverse('fuel-plan'), '/api/geo/route')
 

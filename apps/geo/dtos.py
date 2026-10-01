@@ -103,6 +103,7 @@ class FuelRouteResponse:
     fuel_stops: list[FuelStopResponse]
     fuel: FuelSummaryResponse
     planning: PlanningResponse
+    route_url: str | None = None
 
     def to_dict(self):
         return asdict(self)

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.geo.clients.locationiq import LocationIQClient, LocationIQError
+from apps.geo.cache import invalidate_route_cache
 from apps.fuel_stations.services import deduplicate_stations, geocode_stations, stage_csv
 
 
@@ -46,6 +47,7 @@ class Command(BaseCommand):
 
         try:
             source_file, staged = stage_csv(path, batch_size=options['batch_size'])
+            invalidate_route_cache()
             self.stdout.write(f'Staged {staged} CSV rows from {source_file}.')
             groups, removed = deduplicate_stations()
             self.stdout.write(f'Removed {removed} repeated rows from {groups} truckstops.')
@@ -61,6 +63,7 @@ class Command(BaseCommand):
                     f'Processed: {found} geocoded, {missing} without a match.'
                 ),
             )
+            invalidate_route_cache()
         except (OSError, ValueError, LocationIQError) as exc:
             raise CommandError(str(exc)) from None
         self.stdout.write(self.style.SUCCESS(

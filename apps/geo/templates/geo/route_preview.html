@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel route preview</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css">
+  <style>
+    html, body, #map { width: 100%; height: 100%; margin: 0; }
+    body { font-family: system-ui, sans-serif; }
+    #summary { position: absolute; z-index: 1; top: 12px; left: 12px; max-width: min(360px, calc(100% - 48px)); padding: 12px 16px; border-radius: 8px; background: white; box-shadow: 0 2px 12px #0003; font-size: 14px; }
+    #summary strong { display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div id="map" aria-label="LocationIQ map with the saved driving route"></div>
+  <div id="summary"><strong>Fuel route</strong><span id="details">Loading map…</span></div>
+  {{ map_data|json_script:"route-data" }}
+  {{ map_key|json_script:"map-key" }}
+  <script type="module">
+    import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
+
+    const data = JSON.parse(document.getElementById('route-data').textContent);
+    const key = JSON.parse(document.getElementById('map-key').textContent);
+    const geometry = data.route.geometry;
+    const coordinates = geometry.coordinates;
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: `https://tiles.locationiq.com/v3/streets/vector.json?key=${encodeURIComponent(key)}`,
+      center: coordinates[0],
+      zoom: 5,
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    map.on('load', () => {
+      map.addSource('driving-route', {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry },
+      });
+      map.addLayer({
+        id: 'route-outline', type: 'line', source: 'driving-route',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#ffffff', 'line-width': 9 },
+      });
+      map.addLayer({
+        id: 'route-line', type: 'line', source: 'driving-route',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#1565c0', 'line-width': 5 },
+      });
+
+      new maplibregl.Marker({ color: '#1b8a52' }).setLngLat(coordinates[0]).addTo(map);
+      new maplibregl.Marker({ color: '#b3261e' }).setLngLat(coordinates[coordinates.length - 1]).addTo(map);
+      for (const stop of data.fuel_stops) {
+        const popup = new maplibregl.Popup({ offset: 20 }).setText(
+          `${stop.name}: ${stop.gallons_purchased} gal at $${stop.price_per_gallon_usd}/gal`
+        );
+        new maplibregl.Marker({ color: '#e59b12' })
+          .setLngLat([stop.location.lng, stop.location.lat])
+          .setPopup(popup)
+          .addTo(map);
+      }
+
+      const bounds = coordinates.reduce(
+        (box, point) => box.extend(point),
+        new maplibregl.LngLatBounds(coordinates[0], coordinates[0]),
+      );
+      map.fitBounds(bounds, { padding: 48, maxZoom: 15 });
+      document.getElementById('details').textContent =
+        `${data.route.distance_miles} miles · ${data.fuel_stops.length} fuel stops · $${data.fuel.total_fuel_cost_usd} fuel bought`;
+    });
+  </script>
+</body>
+</html>

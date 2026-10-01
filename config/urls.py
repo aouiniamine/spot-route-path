@@ -16,9 +16,10 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from apps.geo.views import fuel_plan
+from apps.geo.views import fuel_plan, route_preview
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/geo/route', fuel_plan, name='fuel-plan'),
+    path('api/geo/route/<uuid:route_id>', route_preview, name='geo-route-preview'),
 ]

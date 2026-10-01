@@ -75,18 +75,19 @@ These measurements show that the key can use both routing APIs and that the retu
 ### 6. Add the API and operations
 
 - Add a thin Django view, URL, and typed request and response DTOs. Keep provider calls and fuel planning in services.
-- Use per-call timeouts, a six-call provider budget, safe retries for provider 429/5xx responses, and short-lived provider response caching. Do not cache complete fuel plans while prices can be re-imported.
+- Use per-call timeouts, a six-call provider budget, safe retries for provider 429/5xx responses, and a database cache for successful full responses. The cache expires after one day; station imports and cleanup invalidate it sooner when prices may change.
 - Record candidate and provider-call counts in the response. Measure p95 latency and tune rate limiting against the account quota before production use.
 
-**Done locally:** the endpoint and DTOs are documented, calls are bounded, and provider errors do not expose the key. Shared caching, endpoint rate limiting, and p95 monitoring still need production infrastructure and quota measurements.
+**Done locally:** the endpoint and DTOs are documented, calls are bounded, and provider errors do not expose the key. The `routes_cache` table stores successful responses for one day. Endpoint rate limiting and p95 monitoring still need production infrastructure and quota measurements.
 
 ### Implementation summary — 2026-10-01
 
 - Added `POST /api/geo/route` with strict coordinate request and typed response DTOs.
 - Added the LocationIQ routing client, PostGIS corridor search, bounded fuel optimization, final Directions verification, and decimal price math.
 - A short route normally uses one Directions call. A long route normally adds one Matrix and one final Directions call. No extra call is made for zero-purchase waypoints. The six-call budget allows limited retries.
-- Automated endpoint, planner, provider, import, and cleanup tests pass (30 app tests total). One live route succeeded before this optimization; a later live request received HTTP 429, so the updated route still needs a live check when quota permits.
+- Automated endpoint, planner, provider, import, and cleanup tests pass. An additional [30-case suite](geo-route-test-cases.md) exercises request, radius, and fuel behavior without the CSV or live API. One live route succeeded before this optimization; a later live request received HTTP 429, so the updated route still needs a live check when quota permits.
 - The station cleanup command removed 1,413 repeated rows from 678 physical truckstop groups in the local database. A second dry run found zero remaining groups. The import command now repeats cleanup after staging so those rows do not remain on a later import.
+- A database cache returns repeated successful requests without rerunning the planner or provider calls. It expires after 24 hours and is cleared when station data is imported or cleaned. Cache hit, expiry, error, and request-key tests pass.
 
 ## Tests before release
 

@@ -17,6 +17,24 @@ and can travel up to 500 miles per tank. Prices are the imported station prices
 per gallon. See [the API contract](docs/fuel-route-api-plan.md) for the DTO fields
 and error codes.
 
+The response also includes `route_url`, an absolute link to
+`GET /api/geo/route/{uuid}`. Open that link to view the saved driving line and
+fuel stops on a LocationIQ map, or embed it:
+
+```html
+<iframe src="https://your-api.example/api/geo/route/{uuid}" title="Fuel route map" width="800" height="500"></iframe>
+```
+
+The link expires with the cached route after 24 hours; an expired or unknown
+UUID returns 404. The preview draws the saved GeoJSON line without another
+LocationIQ Directions request. Map tiles are loaded by the viewer's browser.
+
+Successful route responses are stored in the `routes_cache` database table for
+24 hours. Each entry has a UUID primary key and a unique request hash. Repeating
+the same start and finish coordinates returns the saved JSON response without
+a new LocationIQ call. Importing or cleaning station data clears the cache so
+changed prices are reflected on the next request.
+
 ## Local setup
 
 The database runs in Docker on host port 5444. Django runs locally in `.venv`.
@@ -33,7 +51,10 @@ docker compose up -d db
 python manage.py migrate
 ```
 
-Put your LocationIQ key in `.env` as `LOCATIONIQ_API_KEY=your-key`, then run:
+Put your LocationIQ server key in `.env` as `LOCATIONIQ_API_KEY=your-key`.
+For the map preview, set `LOCATIONIQ_MAPS_PUBLIC_KEY` to a separate public token
+with HTTP referrer restrictions. If unset, the server key is used for map tiles
+and is visible in the page. Then run:
 
 ```sh
 python manage.py import_fuel_stations --limit 10

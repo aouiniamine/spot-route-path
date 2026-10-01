@@ -1,4 +1,5 @@
 import csv
+from datetime import timedelta
 from io import StringIO
 from decimal import Decimal
 from pathlib import Path
@@ -9,9 +10,11 @@ from django.test import TestCase
 from django.test import override_settings
 from django.core.management import call_command
 from django.contrib.gis.geos import Point
+from django.utils import timezone
 
 from apps.geo.clients.locationiq import GeocodingResult
 from apps.geo.models import NominatimSearchCache
+from apps.geo.models import RouteCache
 
 from .management.commands.retry_fuel_stations_osm import PacedNominatimClient
 from .models import FuelStation
@@ -83,9 +86,14 @@ class FuelStationDeduplicationTests(TestCase):
                 writer.writerow(['7', 'Station', '1 Main St', 'Albany', 'NY', '20', '3.20'])
                 writer.writerow(['7', 'Station', '1 Main St', 'Albany', 'NY', '20', '3.10'])
             for _ in range(2):
+                RouteCache.objects.create(
+                    key='a' * 64, request={}, response={'fuel': {'total_fuel_cost_usd': '9.99'}},
+                    expires_at=timezone.now() + timedelta(days=1),
+                )
                 call_command('import_fuel_stations', '--file', str(path), stdout=StringIO())
                 self.assertEqual(FuelStation.objects.count(), 1)
                 self.assertEqual(FuelStation.objects.get().retail_price, Decimal('3.10'))
+                self.assertFalse(RouteCache.objects.exists())
 
 
 class FuelStationImportTests(TestCase):

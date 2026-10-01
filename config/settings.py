@@ -34,6 +34,7 @@ ALLOWED_HOSTS = [
 ]
 
 LOCATIONIQ_API_KEY = os.getenv('LOCATIONIQ_API_KEY', '')
+LOCATIONIQ_MAPS_PUBLIC_KEY = os.getenv('LOCATIONIQ_MAPS_PUBLIC_KEY') or LOCATIONIQ_API_KEY
 NOMINATIM_CONTACT_EMAIL = os.getenv('NOMINATIM_CONTACT_EMAIL', '')
 NOMINATIM_BASE_URL = os.getenv('NOMINATIM_BASE_URL', 'https://nominatim.openstreetmap.org/search')
 
@@ -56,7 +57,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
+    # 'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
