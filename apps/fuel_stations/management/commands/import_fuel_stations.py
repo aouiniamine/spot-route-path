@@ -4,7 +4,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.geo.clients.locationiq import LocationIQClient, LocationIQError
-from apps.fuel_stations.services import geocode_stations, stage_csv
+from apps.fuel_stations.services import deduplicate_stations, geocode_stations, stage_csv
 
 
 class Command(BaseCommand):
@@ -47,6 +47,8 @@ class Command(BaseCommand):
         try:
             source_file, staged = stage_csv(path, batch_size=options['batch_size'])
             self.stdout.write(f'Staged {staged} CSV rows from {source_file}.')
+            groups, removed = deduplicate_stations()
+            self.stdout.write(f'Removed {removed} repeated rows from {groups} truckstops.')
             client = LocationIQClient(
                 api_key, request_interval=options['request_interval']
             )

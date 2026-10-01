@@ -1,17 +1,91 @@
 import csv
+from io import StringIO
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from django.test import TestCase
+from django.test import override_settings
+from django.core.management import call_command
+from django.contrib.gis.geos import Point
 
 from apps.geo.clients.locationiq import GeocodingResult
 from apps.geo.models import NominatimSearchCache
 
 from .management.commands.retry_fuel_stations_osm import PacedNominatimClient
 from .models import FuelStation
-from .services import geocode_stations, retry_unmatched_stations, stage_csv
+from .services import deduplicate_stations, geocode_stations, retry_unmatched_stations, stage_csv
+
+
+class FuelStationDeduplicationTests(TestCase):
+    def test_command_keeps_cheapest_row_and_its_source_identity(self):
+        common = dict(source_file='test.csv', opis_truckstop_id='7',
+                      name='Station', address='1 Main St', city='Albany',
+                      state='NY', rack_id='20')
+        cheap = FuelStation.objects.create(**common, source_row_number=2,
+                                           retail_price=Decimal('3.10'))
+        FuelStation.objects.create(**common, source_row_number=3,
+                                   retail_price=Decimal('3.20'),
+                                   latitude=Decimal('42.65258'),
+                                   longitude=Decimal('-73.75623'),
+                                   location=Point(-73.75623, 42.65258, srid=4326),
+                                   geocoding_status=FuelStation.GeocodingStatus.GEOCODED)
+        output = StringIO()
+        call_command('deduplicate_fuel_stations', '--dry-run', stdout=output)
+        self.assertIn('Would remove 1 rows', output.getvalue())
+        self.assertEqual(FuelStation.objects.count(), 2)
+        cheap.refresh_from_db()
+        self.assertIsNone(cheap.location)
+
+        call_command('deduplicate_fuel_stations', stdout=StringIO())
+        self.assertEqual(FuelStation.objects.count(), 1)
+        cheap.refresh_from_db()
+        self.assertEqual(cheap.retail_price, Decimal('3.10'))
+        self.assertEqual(cheap.source_row_number, 2)
+        self.assertEqual(cheap.location.x, -73.75623)
+        self.assertEqual(deduplicate_stations(), (0, 0))
+
+    def test_distinct_addresses_are_not_collapsed(self):
+        for number, address in [(2, '1 Main St'), (3, '2 Main St')]:
+            FuelStation.objects.create(
+                source_file='test.csv', source_row_number=number,
+                opis_truckstop_id='7', name='Station', address=address,
+                city='Albany', state='NY', rack_id='20', retail_price=Decimal('3.10'),
+            )
+        self.assertEqual(deduplicate_stations(), (0, 0))
+        self.assertEqual(FuelStation.objects.count(), 2)
+
+    def test_identity_ignores_case_and_surrounding_whitespace(self):
+        common = dict(source_file='test.csv', name='Station', rack_id='20')
+        FuelStation.objects.create(
+            **common, source_row_number=2, opis_truckstop_id=' 7 ',
+            address=' 1 Main St ', city='Albany', state='ny',
+            retail_price=Decimal('3.20'),
+        )
+        FuelStation.objects.create(
+            **common, source_row_number=3, opis_truckstop_id='7',
+            address='1 main st', city=' ALBANY ', state='NY',
+            retail_price=Decimal('3.10'),
+        )
+        self.assertEqual(deduplicate_stations(), (1, 1))
+        self.assertEqual(FuelStation.objects.get().source_row_number, 3)
+
+    @override_settings(LOCATIONIQ_API_KEY='test-key')
+    @patch('apps.fuel_stations.management.commands.import_fuel_stations.geocode_stations', return_value=(0, 0))
+    def test_import_cleans_repeated_rows_on_each_run(self, geocode):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stations.csv'
+            with path.open('w', newline='', encoding='utf-8') as output:
+                writer = csv.writer(output)
+                writer.writerow(['OPIS Truckstop ID', 'Truckstop Name', 'Address',
+                                 'City', 'State', 'Rack ID', 'Retail Price'])
+                writer.writerow(['7', 'Station', '1 Main St', 'Albany', 'NY', '20', '3.20'])
+                writer.writerow(['7', 'Station', '1 Main St', 'Albany', 'NY', '20', '3.10'])
+            for _ in range(2):
+                call_command('import_fuel_stations', '--file', str(path), stdout=StringIO())
+                self.assertEqual(FuelStation.objects.count(), 1)
+                self.assertEqual(FuelStation.objects.get().retail_price, Decimal('3.10'))
 
 
 class FuelStationImportTests(TestCase):

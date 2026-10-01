@@ -1,8 +1,21 @@
 # Spotter
 
 The Django project uses a PostGIS database. `apps.fuel_stations` owns the station
-records and CSV import; `apps.geo` contains the LocationIQ integration. No HTTP
-endpoints are defined for fuel stations.
+records and CSV import; `apps.geo` contains geocoding and the fuel route API.
+
+## Fuel route API
+
+`POST /api/geo/route` accepts JSON coordinates:
+
+```json
+{"start":{"lat":41.8781,"lng":-87.6298},"finish":{"lat":39.7392,"lng":-104.9903}}
+```
+
+The response contains a GeoJSON driving line, fuel stops, gallons bought, and
+total USD paid after departure. The vehicle starts with 50 gallons, gets 10 mpg,
+and can travel up to 500 miles per tank. Prices are the imported station prices
+per gallon. See [the API contract](docs/fuel-route-api-plan.md) for the DTO fields
+and error codes.
 
 ## Local setup
 
@@ -34,6 +47,10 @@ requests. Change these with `--batch-size` and `--request-interval` to fit your
 plan. `--limit` stages all rows but geocodes only the requested number for a
 trial; `--retry-no-match` retries addresses that previously returned no result.
 Rerunning the command keeps successful geocodes and updates changed source rows.
+After staging, the import removes repeated rows for the same truckstop ID and
+address, keeping the lowest price per gallon. To clean an existing database
+without reimporting, run `python manage.py deduplicate_fuel_stations`. Use
+`--dry-run` to see the row count first.
 
 LocationIQ candidates must match the CSV city and state. If the address query
 has no match, the command tries the truckstop name with the city and state.

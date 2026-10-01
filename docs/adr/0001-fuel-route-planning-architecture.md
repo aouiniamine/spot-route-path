@@ -1,6 +1,6 @@
 # ADR 0001: Use LocationIQ for road routes
 
-Status: **accepted for routing provider; selective search proposed**  
+Status: **accepted and implemented for the first release**  
 Date: 2026-10-01  
 Related documents: [API plan](../fuel-route-api-plan.md) · [Implementation plan](../fuel-route-implementation-plan.md)
 
@@ -20,14 +20,14 @@ Straight-line distance from coordinates is useful for quickly removing impossibl
 
 ## Recommended flow: choice 2
 
-1. Geocode the start and finish if they are addresses. Cache repeated lookups. Ask Directions once for the direct driving route and full GeoJSON geometry.
+1. Accept only `lat` and `lng` for start and finish. Apply a local radius estimate around the center of the contiguous US, then ask Directions once for the direct driving route and full GeoJSON geometry.
 2. If that route is at most 500 miles, return it with no fuel stops. The assumed full tank covers it.
 3. Use PostGIS to find US stations near the route. In Python, place them along the route and use straight-line lower bounds to discard only pairs that cannot be within 500 miles. Keep stations spread across the trip.
-4. Ask Matrix for road distance and time **only for promising directed pairs**. Batch requests within the provider's coordinate limit. Never use `fallback_speed` to invent a drivable leg.
-5. Optimize stop order and gallons purchased on the backend. Ask Directions for the chosen stops in travel order. Check its snapped waypoints, actual leg distances, detour, and fuel balance. Retry a different plan within a call/time budget if this one fails.
+4. Limit the candidates to 23 stations so one Matrix request covers them plus the endpoints. Never use `fallback_speed` to invent a drivable leg.
+5. Optimize stop order and approximate fuel state on the backend. Drop zero-purchase waypoints using Matrix when this does not worsen cost or distance. Ask Directions once for the chosen stops. Recalculate exact gallons from its legs, omit any final zero-purchase pins, and enforce fuel and detour limits.
 6. Return the final Directions geometry and costs. Say “optimized estimate within the searched corridor,” not “globally cheapest.”
 
-The aim is one direct Directions call, a small number of Matrix batches for trips that need fuel, and one final Directions call. These are design targets, not guaranteed counts: long routes may need waypoint chunks, and failed plans may require another verification call. Measure real call counts and p95 time before setting the cap.
+The implemented budget is six external calls, including retries. A short trip normally uses one direct Directions call. A long trip normally adds one Matrix and one final Directions call. Zero-purchase handling uses backend calculations and adds no provider call. Cached responses consume no external call. Long routes beyond the 23-station search budget return `503`. The radius estimate can include points across the Canada or Mexico border and excludes Alaska and Hawaii.
 
 ## Rules that protect accuracy
 
@@ -35,7 +35,7 @@ The aim is one direct Directions call, a small number of Matrix batches for trip
 - Matrix distances are estimates for choosing stops. The **final Directions legs** decide whether the plan is safe and what the trip cost is.
 - Keep the same driving profile and coordinate order (`longitude,latitude`) across requests. Directions follows the order of supplied stops.
 - A request that reaches a provider-call or time cap is `planning_unavailable`, not proof that no fuel stop exists.
-- A full 50-gallon starting tank and fuel bought after departure are working product assumptions. Treat `retail_price` as price per gallon. When rows repeat the same physical stop, use the lowest listed price once and keep the chosen source row in the result.
+- A full 50-gallon starting tank and fuel bought after departure are working product assumptions. Treat `retail_price` as price per gallon. An import-time cleanup keeps the lowest listed price row for each repeated physical stop; requests read the cleaned table.
 
 ## Evidence from the first spike
 

@@ -10,7 +10,7 @@ from typing import Callable
 
 from django.conf import settings
 from django.contrib.gis.geos import Point
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from apps.geo.clients.nominatim import NominatimError
@@ -76,6 +76,80 @@ def stage_csv(path: Path, *, batch_size: int) -> tuple[str, int]:
         if batch:
             _save_source_batch(batch)
     return source_file, count
+
+
+@transaction.atomic
+def deduplicate_stations(*, dry_run: bool = False) -> tuple[int, int]:
+    """Keep the lowest-price row per truckstop ID and normalized address.
+
+    PostgreSQL ranks the rows, copies an available geocode to the winner, and
+    deletes the others. The write path locks the table so the count and cleanup
+    describe one consistent set of rows.
+    """
+    table = connection.ops.quote_name(FuelStation._meta.db_table)
+    identity = (
+        'lower(btrim(opis_truckstop_id)), lower(btrim(address)), '
+        'lower(btrim(city)), upper(btrim(state))'
+    )
+    order = 'retail_price, source_file, source_row_number, id'
+    with connection.cursor() as cursor:
+        if not dry_run:
+            cursor.execute(f'LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE')
+        cursor.execute(f'''
+            SELECT count(*), coalesce(sum(row_count - 1), 0)
+            FROM (
+                SELECT count(*) AS row_count
+                FROM {table}
+                GROUP BY {identity}
+                HAVING count(*) > 1
+            ) AS duplicates
+        ''')
+        groups, removed = cursor.fetchone()
+        if dry_run or not removed:
+            return groups, removed
+
+        cursor.execute(f'''
+            WITH ranked AS (
+                SELECT
+                    first_value(id) OVER (
+                        PARTITION BY {identity} ORDER BY {order}
+                    ) AS keeper_id,
+                    first_value(id) OVER (
+                        PARTITION BY {identity}
+                        ORDER BY (location IS NULL), {order}
+                    ) AS donor_id
+                FROM {table}
+            ), pairs AS (
+                SELECT DISTINCT keeper_id, donor_id
+                FROM ranked WHERE keeper_id <> donor_id
+            )
+            UPDATE {table} AS keeper
+            SET latitude = donor.latitude,
+                longitude = donor.longitude,
+                location = donor.location,
+                display_name = donor.display_name,
+                geocoding_status = donor.geocoding_status,
+                geocoding_error = donor.geocoding_error,
+                osm_attempted_at = donor.osm_attempted_at
+            FROM pairs JOIN {table} AS donor ON donor.id = pairs.donor_id
+            WHERE keeper.id = pairs.keeper_id
+              AND keeper.location IS NULL
+              AND donor.location IS NOT NULL
+        ''')
+        cursor.execute(f'''
+            WITH ranked AS (
+                SELECT id, row_number() OVER (
+                    PARTITION BY {identity} ORDER BY {order}
+                ) AS position
+                FROM {table}
+            )
+            DELETE FROM {table} AS station
+            USING ranked
+            WHERE station.id = ranked.id AND ranked.position > 1
+        ''')
+        if cursor.rowcount != removed:
+            raise RuntimeError('Station cleanup count changed during the transaction')
+    return groups, removed
 
 
 @transaction.atomic
