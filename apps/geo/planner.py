@@ -42,6 +42,25 @@ def _distance(a, b):
     return 3958.7613 * 2 * math.asin(min(1, math.sqrt(h)))
 
 
+def select_candidates(candidates, route_miles, max_candidates=23):
+    """Keep route coverage within one 25-point Matrix request."""
+    if not candidates:
+        return []
+    bucket_miles = max(100, route_miles / max_candidates)
+    buckets = {}
+    for candidate in candidates:
+        bucket = min(max_candidates - 1, int(candidate.marker // bucket_miles))
+        buckets.setdefault(bucket, []).append(candidate)
+    chosen = []
+    for bucket in sorted(buckets):
+        chosen.extend(sorted(buckets[bucket], key=lambda c: (c.station.retail_price, c.marker))[:2])
+    if len(chosen) > max_candidates:
+        chosen = [min(buckets[b], key=lambda c: (c.station.retail_price, c.marker)) for b in sorted(buckets)]
+    remaining = sorted((c for c in candidates if c not in chosen), key=lambda c: c.station.retail_price)
+    chosen.extend(remaining[:max_candidates-len(chosen)])
+    return sorted(chosen, key=lambda c: c.marker)
+
+
 def find_candidates(geometry, route_miles, corridor_miles=25, max_candidates=23):
     coordinates = geometry['coordinates']
     # Simplifying only the lookup line keeps the indexed spatial query cheap.
@@ -66,24 +85,7 @@ def find_candidates(geometry, route_miles, corridor_miles=25, max_candidates=23)
         marker = route_miles * cumulative[index] / max(cumulative[-1], 0.001)
         if 1 < marker < route_miles - 1:
             candidates.append(Candidate(row, marker))
-    if not candidates:
-        return [], 0
-    # Keep coverage throughout the route before selecting further cheap sites.
-    buckets = {}
-    for candidate in candidates:
-        bucket = int(candidate.marker // 100)
-        buckets.setdefault(bucket, []).append(candidate)
-    chosen = []
-    for bucket in sorted(buckets):
-        chosen.extend(sorted(buckets[bucket], key=lambda c: (c.station.retail_price, c.marker))[:2])
-    if len(chosen) > max_candidates:
-        # A long route requires at least one candidate per 100-mile band.
-        if len(buckets) > max_candidates:
-            raise PlanningUnavailable('Route exceeds the station search budget')
-        chosen = [min(buckets[b], key=lambda c: c.station.retail_price) for b in sorted(buckets)]
-    remaining = sorted((c for c in candidates if c not in chosen), key=lambda c: c.station.retail_price)
-    chosen.extend(remaining[:max_candidates-len(chosen)])
-    return sorted(chosen, key=lambda c: c.marker), len(candidates)
+    return select_candidates(candidates, route_miles, max_candidates), len(candidates)
 
 
 def optimize_path(candidates, matrix):
@@ -217,7 +219,7 @@ def build_response(route, selected, candidate_count, provider_calls):
         cost = (purchase * row.retail_price).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         total += cost
         stops.append(FuelStopResponse(
-            station_id=row.id, source_file=row.source_file,
+            station_id=row.id,
             source_row_number=row.source_row_number, name=row.name,
             address=f'{row.address}, {row.city}, {row.state}', location=candidate.point,
             mile_marker=round(float(marker), 2), price_per_gallon_usd=str(row.retail_price),

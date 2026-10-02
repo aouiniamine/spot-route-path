@@ -36,7 +36,6 @@ Illustrative response shape, not a real quote:
   },
   "fuel_stops": [{
     "station_id": 123,
-    "source_file": "data/truck-stations-and-prices.csv",
     "source_row_number": 456,
     "name": "Example station",
     "address": "Example address",

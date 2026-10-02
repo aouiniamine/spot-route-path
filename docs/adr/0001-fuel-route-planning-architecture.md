@@ -27,7 +27,7 @@ Straight-line distance from coordinates is useful for quickly removing impossibl
 5. Optimize stop order and approximate fuel state on the backend. Drop zero-purchase waypoints using Matrix when this does not worsen cost or distance. Ask Directions once for the chosen stops. Recalculate exact gallons from its legs, omit any final zero-purchase pins, and enforce fuel and detour limits.
 6. Return the final Directions geometry and costs. Say “optimized estimate within the searched corridor,” not “globally cheapest.”
 
-The implemented budget is six external calls, including retries. A short trip normally uses one direct Directions call. A long trip normally adds one Matrix and one final Directions call. Zero-purchase handling uses backend calculations and adds no provider call. Cached responses consume no external call. Long routes beyond the 23-station search budget return `503`. The radius estimate can include points across the Canada or Mexico border and excludes Alaska and Hawaii.
+The implemented budget is six external calls, including retries. A short trip normally uses one direct Directions call. A long trip normally adds one Matrix and one final Directions call. Zero-purchase handling uses backend calculations and adds no provider call. Cached responses consume no external call. Long routes use wider coverage buckets to stay within the 23-station Matrix limit. The radius estimate can include points across the Canada or Mexico border and excludes Alaska and Hawaii.
 
 ## Rules that protect accuracy
 

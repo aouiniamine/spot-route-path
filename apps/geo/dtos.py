@@ -67,7 +67,6 @@ class RouteResponse:
 @dataclass(frozen=True)
 class FuelStopResponse:
     station_id: int
-    source_file: str
     source_row_number: int
     name: str
     address: str

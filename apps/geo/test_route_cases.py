@@ -9,7 +9,7 @@ from .clients.routing import RoutingClient
 from .dtos import CoordinateRequest, FuelRouteRequest, RequestValidationError
 from .planner import (
     Candidate, MILE_METERS, PlanningUnavailable, build_response,
-    exact_purchases, optimize_path,
+    exact_purchases, optimize_path, select_candidates,
 )
 
 
@@ -137,6 +137,15 @@ class RadiusCases(SimpleTestCase):
 
 
 class FuelCases(SimpleTestCase):
+    def test_long_route_keeps_station_coverage_within_matrix_limit(self):
+        candidates = [Candidate(station('3.00', index), 50 + 100 * index) for index in range(27)]
+
+        selected = select_candidates(candidates, route_miles=2800)
+
+        self.assertLessEqual(len(selected), 23)
+        self.assertEqual(selected[0].marker, 50)
+        self.assertEqual(selected[-1].marker, 2650)
+
     def test_21_short_trip_needs_no_purchase(self):
         self.assertEqual(exact_purchases([], miles(100)), [])
 

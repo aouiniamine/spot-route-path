@@ -53,7 +53,7 @@ These measurements show that the key can use both routing APIs and that the retu
 - Ask Matrix for road distance and time for the remaining promising directed pairs. Batch these calls within LocationIQ's coordinate limit. Do not use its straight-line `fallback_speed` option. Apply a measured cap on stations, pair checks, provider calls, and elapsed time.
 - If the cap stops the search before coverage can be decided, return `planning_unavailable`, not “no stations exist.”
 
-**Done:** PostGIS corridor search, US station filtering, coverage buckets, and one capped Matrix table are implemented. A route requiring more than the 23-station search budget returns `503`. Price row cleanup runs during import and is available as a separate management command.
+**Done:** PostGIS corridor search, US station filtering, coverage buckets, and one capped Matrix table are implemented. Bucket width grows on long routes so up to 23 stations cover the full trip in one Matrix request. Price row cleanup runs during import and is available as a separate management command.
 
 ### 4. Choose stops and gallons
 
